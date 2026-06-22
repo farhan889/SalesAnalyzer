@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sales Analyzer - NotebookLM Style</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'lm-bg': '#f3f4f6', 
+                        'lm-surface': '#ffffff', 
+                        'lm-border': '#e5e7eb', 
+                        'lm-primary': '#1a73e8', 
+                        'lm-text': '#202124', 
+                        'lm-text-secondary': '#5f6368', 
+                        'lm-accent': '#e8f0fe', 
+                        'lm-mindmap-node': '#ffffff',
+                        'lm-mindmap-border': '#dadce0',
+                        'lm-mindmap-link': '#bdc1c6',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        serif: ['Merriweather', 'serif'],
+                    },
+                    boxShadow: {
+                        'lm': '0 1px 2px 0 rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15)',
+                        'lm-hover': '0 1px 3px 0 rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15)',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: theme('colors.lm-bg');
+            color: theme('colors.lm-text');
+            font-family: 'Inter', sans-serif;
+            overflow: hidden; 
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* Custom Scrollbar for Chat & Report */
+        .custom-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 10px;
+        }
+
+        .node circle { fill: theme('colors.lm-surface'); stroke: theme('colors.lm-primary'); stroke-width: 2px; }
+        .node text { font: 12px 'Inter', sans-serif; fill: theme('colors.lm-text'); pointer-events: none; }
+        .link { fill: none; stroke: theme('colors.lm-mindmap-link'); stroke-width: 1.5px; opacity: 0.6; }
+        .node rect { fill: theme('colors.lm-surface'); stroke: theme('colors.lm-mindmap-border'); stroke-width: 1px; rx: 6; ry: 6; transition: all 0.2s; }
+        .node:hover rect { stroke: theme('colors.lm-primary'); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1)); cursor: pointer; }
+        
+        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-bottom: 1px solid theme('colors.lm-border'); }
+
+        .mindmap-tooltip {
+            position: absolute; text-align: left; padding: 12px; font-size: 13px;
+            background: theme('colors.lm-surface'); border: 1px solid theme('colors.lm-border');
+            box-shadow: theme('boxShadow.lm'); border-radius: 8px; pointer-events: none; opacity: 0;
+            z-index: 50; max-width: 250px;
+        }
+
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid theme('colors.lm-primary'); border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .tab-btn { position: relative; }
+        .tab-btn.active::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 3px; background-color: theme('colors.lm-primary'); border-radius: 3px 3px 0 0; }
+
+        /* Toast notification */
+        #toast { transition: transform 0.3s ease-in-out, opacity 0.3s; transform: translateY(-20px); opacity: 0; pointer-events: none;}
+        #toast.show { transform: translateY(0); opacity: 1; pointer-events: auto;}
+    </style>
+</head>
+<body class="h-screen flex flex-col antialiased">
+
+    <!-- Global Error/Toast Notification -->
+    <div id="toast" class="fixed top-4 left-1/2 transform -translate-x-1/2 z-[100] bg-gray-900 text-white px-6 py-3 rounded-full shadow-lg flex items-center gap-3 font-medium text-sm">
+        <i class="fas fa-info-circle text-blue-400" id="toast-icon"></i>
+        <span id="toast-msg">Notification</span>
+    </div>
+
+    <header class="glass-panel z-20 flex-none px-6 py-3 flex items-center justify-between shadow-sm">
+        <div class="flex items-center gap-3">
+            <div class="bg-blue-100 text-blue-600 p-2 rounded-lg">
+                <i class="fas fa-book-open"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-semibold text-lm-text tracking-tight">Sales Analyzer</h1>
+                <p class="text-xs text-lm-text-secondary">Sales Performance Insights (Flash Lite)</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <!-- API Key Input -->
+            <div class="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 focus-within:ring-2 focus-within:ring-blue-100 focus-within:border-blue-400 transition-all">
+                <i class="fas fa-key text-gray-400 text-sm mr-2"></i>
+                <input type="password" id="api-key" placeholder="Gemini API Key..." class="bg-transparent text-sm outline-none w-32 md:w-48 text-gray-700 placeholder-gray-400">
+            </div>
+            <button class="text-lm-text-secondary hover:text-lm-text transition-colors">
+                <i class="fas fa-cog"></i>
+            </button>
+            <div class="w-8 h-8 bg-indigo-500 rounded-full flex items-center justify-center text-white font-semibold shadow-sm cursor-pointer hover:bg-indigo-600">
+                U
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-grow flex flex-col md:flex-row overflow-hidden relative">
+        
+        <!-- Left Panel: Input Source -->
+        <div class="w-full md:w-1/4 xl:w-1/5 bg-white border-r border-lm-border flex flex-col flex-none z-10 shadow-sm relative transition-all duration-300" id="source-panel">
+            <div class="p-4 border-b border-lm-border flex justify-between items-center bg-gray-50/50">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-lm-text-secondary">Sources</h2>
+            </div>
+
+            <div class="flex-grow flex flex-col p-4 gap-4 overflow-y-auto custom-scroll">
+                
+                <!-- File Upload Zone -->
+                <div id="upload-zone" class="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:bg-gray-50 hover:border-lm-primary transition-colors flex flex-col items-center justify-center relative overflow-hidden group">
+                    <input type="file" id="file-upload" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" accept="image/*,.txt,.csv,.json,.pdf">
+                    <i class="fas fa-cloud-upload-alt text-2xl text-lm-primary mb-2 group-hover:scale-110 transition-transform"></i>
+                    <p class="text-sm font-medium text-gray-700">Upload Sales Report</p>
+                    <p class="text-xs text-gray-500 mt-1">Image, PDF, TXT, or CSV</p>
+                </div>
+
+                <!-- Preview Area (Hidden by default) -->
+                <div id="file-preview-container" class="hidden relative border border-gray-200 rounded-xl p-3 bg-gray-50">
+                    <div class="flex items-center justify-between mb-2 border-b border-gray-200 pb-2">
+                        <span class="text-xs font-semibold text-gray-600 truncate flex-1" id="file-name-display">document.png</span>
+                        <button id="clear-file-btn" class="text-red-400 hover:text-red-600 px-2"><i class="fas fa-times"></i></button>
+                    </div>
+                    <!-- Image preview -->
+                    <img id="image-preview" class="hidden w-full h-32 object-contain bg-white rounded border border-gray-200" />
+                    <!-- Text Preview -->
+                    <div id="text-preview" class="hidden text-xs text-gray-600 h-32 overflow-y-auto custom-scroll font-mono bg-white p-2 border border-gray-200 rounded"></div>
+                </div>
+
+                <div class="relative mt-2">
+                    <div class="absolute inset-0 flex items-center" aria-hidden="true">
+                        <div class="w-full border-t border-gray-200"></div>
+                    </div>
+                    <div class="relative flex justify-center">
+                        <span class="bg-white px-2 text-xs text-gray-500">OR PASTE TEXT</span>
+                    </div>
+                </div>
+
+                <div class="flex flex-col flex-grow relative">
+                    <textarea id="financial-data" 
+                        class="flex-grow w-full p-3 border border-lm-border rounded-xl focus:outline-none focus:ring-2 focus:ring-lm-primary text-sm font-mono leading-relaxed bg-gray-50 custom-scroll"
+                        placeholder='Example:
+Total Sales: 2500000
+Online Sales: 800000
+Store Sales: 1700000
+Gross Profit: 850000
+Net Profit: 350000
+Total Orders: 15000
+Average Order Value: 166.67
+Sales Growth: 12'>Total Sales: 2500000
+Online Sales: 800000
+Store Sales: 1700000
+Gross Profit: 850000
+Net Profit: 350000
+Total Orders: 15000
+Average Order Value: 166.67
+Sales Growth: 12</textarea>
+                </div>
+
+                <button id="analyze-btn" class="w-full bg-lm-primary hover:bg-blue-700 text-white rounded-lg py-3 shadow transition-colors flex items-center justify-center font-medium">
+                    <i class="fas fa-bolt mr-2 text-yellow-300"></i> Generate Map & Report
+                </button>
+            </div>
+        </div>
+
+        <!-- Center Panel: Visualization Canvas -->
+        <div class="flex-1 flex flex-col bg-lm-bg h-full relative">
+            
+            <!-- Top Toolbar/Tabs -->
+            <div class="bg-white border-b border-lm-border px-6 flex items-center justify-between z-10 sticky top-0 shadow-sm">
+                <div class="flex gap-6">
+                    <button class="tab-btn active px-2 py-4 text-sm font-medium text-lm-text transition-colors" data-tab="mindmap-view">
+                        <i class="fas fa-project-diagram mr-2 text-lm-primary"></i>Mind Map
+                    </button>
+                    <button class="tab-btn px-2 py-4 text-sm font-medium text-lm-text-secondary hover:text-lm-text transition-colors" data-tab="report-view">
+                        <i class="fas fa-file-alt mr-2 text-green-600"></i>Detailed Report
+                    </button>
+                </div>
+                
+                <div class="flex items-center gap-3">
+                     <button id="zoom-in" class="p-2 text-gray-500 hover:text-gray-800 rounded hover:bg-gray-100 transition-colors" title="Zoom In">
+                        <i class="fas fa-search-plus"></i>
+                    </button>
+                    <button id="zoom-out" class="p-2 text-gray-500 hover:text-gray-800 rounded hover:bg-gray-100 transition-colors" title="Zoom Out">
+                        <i class="fas fa-search-minus"></i>
+                    </button>
+                     <button id="zoom-reset" class="p-2 text-gray-500 hover:text-gray-800 rounded hover:bg-gray-100 transition-colors" title="Reset View">
+                        <i class="fas fa-compress-arrows-alt"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- View Containers -->
+            <div class="flex-grow relative overflow-hidden bg-[#fafafa]">
+                
+                <!-- Loading Overlay -->
+                <div id="loading-overlay" class="absolute inset-0 bg-white/90 backdrop-blur-sm z-50 flex flex-col items-center justify-center hidden">
+                    <div class="loader mb-4"></div>
+                    <p class="text-sm font-medium text-gray-800" id="loading-text">Analyzing using Gemini Flash Lite...</p>
+                    <p class="text-xs text-gray-500 mt-2">Extracting key financial metrics and building visualization</p>
+                </div>
+
+                <div id="mindmap-view" class="absolute inset-0 w-full h-full">
+                    <svg id="mindmap-svg" class="w-full h-full cursor-grab active:cursor-grabbing"></svg>
+                    <div id="tooltip" class="mindmap-tooltip"></div>
+                    
+                    <!-- Legend -->
+                    <div class="absolute bottom-6 left-6 bg-white p-3 rounded-lg shadow-sm border border-gray-200 text-xs text-gray-600 space-y-2 pointer-events-none">
+                        <div class="flex items-center"><span class="w-3 h-3 rounded-full bg-blue-100 border border-blue-500 mr-2"></span> Category</div>
+                        <div class="flex items-center"><span class="w-3 h-3 rounded-full bg-green-100 border border-green-500 mr-2"></span> Good / Healthy</div>
+                        <div class="flex items-center"><span class="w-3 h-3 rounded-full bg-yellow-100 border border-yellow-500 mr-2"></span> Warning / Monitor</div>
+                        <div class="flex items-center"><span class="w-3 h-3 rounded-full bg-red-100 border border-red-500 mr-2"></span> High Risk</div>
+                    </div>
+                </div>
+
+                <div id="report-view" class="absolute inset-0 w-full h-full bg-white overflow-y-auto hidden custom-scroll">
+                    <div class="max-w-4xl mx-auto p-8 font-serif" id="report-content">
+                        <div class="text-center text-gray-400 mt-20">
+                            <i class="fas fa-magic text-4xl mb-4"></i>
+                            <p class="font-sans">Provide a document and run generation to view the detailed report.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Chat Assistant -->
+        <div class="w-full md:w-80 lg:w-96 bg-white border-l border-lm-border flex flex-col flex-none z-10 shadow-sm relative transition-all" id="chat-panel">
+            <div class="p-4 border-b border-lm-border flex justify-between items-center bg-gray-50/50">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-sparkles text-lm-primary"></i>
+                    <h2 class="text-sm font-semibold uppercase tracking-wider text-lm-text-secondary">Notebook Guide</h2>
+                </div>
+            </div>
+            
+            <div class="flex-grow overflow-y-auto p-4 flex flex-col gap-4 custom-scroll" id="chat-history">
+                <!-- Welcome Message -->
+                <div class="flex gap-3">
+                    <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-robot text-blue-600 text-sm"></i>
+                    </div>
+                    <div class="bg-gray-100 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-gray-800 max-w-[85%]">
+                        Hello! Upload a balance sheet or paste your data, and click "Generate Map & Report". Once loaded, you can ask me questions about your sales performance, growth, or KPIs!
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="p-4 border-t border-lm-border bg-white">
+                <div class="relative flex items-end gap-2 bg-gray-50 border border-gray-300 rounded-xl p-1 focus-within:border-lm-primary focus-within:ring-1 focus-within:ring-lm-primary transition-all shadow-sm">
+                    <textarea id="chat-input" rows="1" class="w-full bg-transparent p-2 text-sm text-gray-800 placeholder-gray-500 focus:outline-none resize-none max-h-32 custom-scroll" placeholder="Ask about the document..."></textarea>
+                    <button id="chat-send" class="bg-lm-primary text-white p-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 m-1 h-8 w-8 flex items-center justify-center">
+                        <i class="fas fa-arrow-up text-sm"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- State & DOM Elements ---
+            const state = {
+                fileContext: null, // { type: 'text'|'image'|'pdf', content: base64/text, mimeType: '' }
+                parsedInput: {},
+                ratios: {},
+                chatHistory: [] // To keep context for chat
+            };
+
+            const elements = {
+                apiKey: document.getElementById('api-key'),
+                fileUpload: document.getElementById('file-upload'),
+                uploadZone: document.getElementById('upload-zone'),
+                filePreviewContainer: document.getElementById('file-preview-container'),
+                fileNameDisplay: document.getElementById('file-name-display'),
+                imagePreview: document.getElementById('image-preview'),
+                textPreview: document.getElementById('text-preview'),
+                clearFileBtn: document.getElementById('clear-file-btn'),
+                textarea: document.getElementById('financial-data'),
+                analyzeBtn: document.getElementById('analyze-btn'),
+                
+                svg: d3.select("#mindmap-svg"),
+                tooltip: d3.select("#tooltip"),
+                loadingOverlay: document.getElementById('loading-overlay'),
+                loadingText: document.getElementById('loading-text'),
+                
+                tabBtns: document.querySelectorAll('.tab-btn'),
+                views: {
+                    'mindmap-view': document.getElementById('mindmap-view'),
+                    'report-view': document.getElementById('report-view')
+                },
+                reportContent: document.getElementById('report-content'),
+                
+                chatInput: document.getElementById('chat-input'),
+                chatSendBtn: document.getElementById('chat-send'),
+                chatHistoryContainer: document.getElementById('chat-history'),
+                
+                zoomControls: { in: document.getElementById('zoom-in'), out: document.getElementById('zoom-out'), reset: document.getElementById('zoom-reset') }
+            };
+
+            let g, zoom;
+
+            // --- Safe Fetch Helper (Bypasses hijacking / proxy parameter leaks on Vercel) ---
+            let safeFetch = window.fetch;
+            try {
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                document.body.appendChild(iframe);
+                if (iframe.contentWindow && iframe.contentWindow.fetch) {
+                    safeFetch = iframe.contentWindow.fetch.bind(iframe.contentWindow);
+                }
+            } catch (e) {
+                console.warn("Could not retrieve un-hijacked native fetch. Falling back to default fetch.", e);
+            }
+
+            // --- Utility Functions ---
+
+            function showToast(message, type = 'info') {
+                const toast = document.getElementById('toast');
+                const icon = document.getElementById('toast-icon');
+                document.getElementById('toast-msg').innerText = message;
+                
+                if (type === 'error') {
+                    toast.classList.replace('bg-gray-900', 'bg-red-600');
+                    icon.className = 'fas fa-exclamation-triangle text-white';
+                } else {
+                    toast.classList.replace('bg-red-600', 'bg-gray-900');
+                    icon.className = 'fas fa-info-circle text-blue-400';
+                }
+
+                toast.classList.add('show');
+                setTimeout(() => toast.classList.remove('show'), 4000);
+            }
+
+            const fileToBase64 = file => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = error => reject(error);
+            });
+
+            const fileToText = file => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsText(file);
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+            });
+
+            // Auto-resize chat textarea
+            elements.chatInput.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = (this.scrollHeight) + 'px';
+            });
+
+            // --- UI Interactions ---
+
+            // Tabs
+            elements.tabBtns.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const targetView = e.currentTarget.dataset.tab;
+                    elements.tabBtns.forEach(b => {
+                        b.classList.remove('active', 'text-lm-text');
+                        b.classList.add('text-lm-text-secondary');
+                    });
+                    e.currentTarget.classList.add('active', 'text-lm-text');
+                    e.currentTarget.classList.remove('text-lm-text-secondary');
+                    Object.values(elements.views).forEach(view => view.classList.add('hidden'));
+                    elements.views[targetView].classList.remove('hidden');
+                });
+            });
+
+            // Zoom
+            elements.zoomControls.in.addEventListener('click', () => { if(zoom) elements.svg.transition().duration(300).call(zoom.scaleBy, 1.2); });
+            elements.zoomControls.out.addEventListener('click', () => { if(zoom) elements.svg.transition().duration(300).call(zoom.scaleBy, 0.8); });
+            elements.zoomControls.reset.addEventListener('click', () => { if(zoom) elements.svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity.translate(elements.svg.node().clientWidth/2, 50).scale(1)); });
+
+            // File Upload Handling
+            elements.fileUpload.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                elements.fileNameDisplay.innerText = file.name;
+                elements.filePreviewContainer.classList.remove('hidden');
+                elements.uploadZone.classList.add('hidden');
+                
+                if (file.type.startsWith('image/')) {
+                    const b64 = await fileToBase64(file);
+                    state.fileContext = { type: 'image', content: b64, mimeType: file.type };
+                    elements.imagePreview.src = `data:${file.type};base64,${b64}`;
+                    elements.imagePreview.classList.remove('hidden');
+                    elements.textPreview.classList.add('hidden');
+                } else if (file.type === 'application/pdf') {
+                    const b64 = await fileToBase64(file);
+                    state.fileContext = { type: 'pdf', content: b64, mimeType: 'application/pdf' };
+                    elements.textPreview.innerText = "PDF Document Loaded: " + file.name + "\n\nReady for analysis.";
+                    elements.textPreview.classList.remove('hidden');
+                    elements.imagePreview.classList.add('hidden');
+                } else {
+                    const text = await fileToText(file);
+                    state.fileContext = { type: 'text', content: text, mimeType: 'text/plain' };
+                    elements.textPreview.innerText = text.substring(0, 500) + (text.length > 500 ? '...' : '');
+                    elements.textPreview.classList.remove('hidden');
+                    elements.imagePreview.classList.add('hidden');
+                }
+            });
+
+            elements.clearFileBtn.addEventListener('click', () => {
+                elements.fileUpload.value = '';
+                state.fileContext = null;
+                elements.filePreviewContainer.classList.add('hidden');
+                elements.uploadZone.classList.remove('hidden');
+            });
+
+
+            // --- Gemini API Logic ---
+
+            async function callGemini(prompt, isJson = false, contextOverride = null) {
+                const apiKey = elements.apiKey.value.trim();
+                if (!apiKey) {
+                    showToast("Please enter your Gemini API Key in the top right.", "error");
+                    throw new Error("Missing API Key");
+                }
+
+                // Explicit URL creation to prevent any automatic query parameter appending by third-party proxies
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
+                let parts = [];
+
+                // Use the provided context (for chat) or the current state (for analysis)
+                const docContext = contextOverride !== undefined ? contextOverride : state.fileContext;
+
+                // Add document context if available
+                if (docContext) {
+                    if (docContext.type === 'image' || docContext.type === 'pdf') {
+                        parts.push({ inlineData: { mimeType: docContext.mimeType, data: docContext.content } });
+                    } else if (docContext.type === 'text') {
+                        parts.push({ text: "Document Context:\n" + docContext.content + "\n\n" });
+                    }
+                } else if (!contextOverride) {
+                    // Fallback to text area if no file uploaded
+                     parts.push({ text: "Document Context:\n" + elements.textarea.value + "\n\n" });
+                }
+
+                parts.push({ text: prompt });
+
+                const payload = {
+                    contents: [{ parts: parts }],
+                    systemInstruction: { 
+                        parts: [{ text: "You are a highly capable sales analyst AI. Assist the user in analyzing balance sheets, extracting structured data, and providing financial insights." }]
+                    }
+                };
+
+                if (isJson) {
+                    payload.generationConfig = { responseMimeType: "application/json" };
+                }
+
+                try {
+                    // Using safeFetch (derived from native iframe clean context) to bypass query-parameter-binding hijackers
+                    const response = await safeFetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        const err = await response.json();
+                        throw new Error(err.error?.message || "API request failed");
+                    }
+
+                    const data = await response.json();
+                    return data.candidates[0].content.parts[0].text;
+                } catch (error) {
+                    console.error("Gemini API Error:", error);
+                    showToast(error.message, "error");
+                    throw error;
+                }
+            }
+
+
+            // --- Analysis Pipeline ---
+
+            function normalizeInput(jsonObj) {
+                // Converts JSON like {"currentAssets": 50000} to standard {"currentassets": {originalKey: "Current Assets", value: 50000}}
+                const result = {};
+                for (let key in jsonObj) {
+                    if (jsonObj[key] !== null && typeof jsonObj[key] === 'number') {
+                        const standardKey = key.toLowerCase().replace(/[^a-z]/g, '');
+                        // create a nice display name from camelCase
+                        const displayKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+                        result[standardKey] = { originalKey: displayKey, value: jsonObj[key] };
+                    }
+                }
+                return result;
+            }
+
+            elements.analyzeBtn.addEventListener('click', async () => {
+                if (!elements.apiKey.value) {
+                    showToast("Please enter your Gemini API Key to use AI features.", "error");
+                    return;
+                }
+
+                elements.loadingOverlay.classList.remove('hidden');
+                elements.analyzeBtn.disabled = true;
+
+                try {
+                    const extractPrompt = `
+                        Analyze the provided sales report data. Extract the following key values and output them strictly as a valid JSON object. 
+                        Keys to extract: currentAssets, currentLiabilities, totalLiabilities, totalEquity, inventory, netProfit, revenue.
+                        Use ONLY numeric values. If a value is completely missing and cannot be derived, omit the key or set it to null.
+                        Do not include markdown blocks, just raw JSON.
+                    `;
+                    
+                    elements.loadingText.innerText = "Extracting data with Gemini Flash Lite...";
+                    let responseText = await callGemini(extractPrompt, true);
+                    
+                    // Clean up markdown if AI includes it despite instructions
+                    responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+                    const rawJson = JSON.parse(responseText);
+                    
+                    elements.loadingText.innerText = "Building map and report...";
+                    const parsed = normalizeInput(rawJson);
+                    state.parsedInput = parsed;
+
+                    const { ratios } = calculateRatios(parsed);
+                    state.ratios = ratios;
+
+                    const hierarchyData = buildHierarchyData(ratios, parsed);
+
+                    renderMindmap(hierarchyData);
+                    generateReport(ratios, parsed);
+                    
+                    // Add initial context to chat
+                    addChatMessage('system', "I've analyzed the document using Gemini 2.5 Flash Lite and generated the mind map and report. Feel free to ask me questions like 'Why is my liquidity at risk?' or 'What does the debt-to-equity ratio mean for my company?'");
+
+                } catch (error) {
+                    console.error("Extraction Failed:", error);
+                } finally {
+                    elements.loadingOverlay.classList.add('hidden');
+                    elements.analyzeBtn.disabled = false;
+                    elements.loadingText.innerText = "Analyzing using Gemini...";
+                }
+            });
+
+
+            // --- Core Calculations ---
+             function getVal(parsed, keys) {
+                for (let key of keys) {
+                    if (parsed[key] && parsed[key].value !== undefined) return parsed[key].value;
+                }
+                return null;
+            }
+
+            function calculateRatios(parsed) {
+                const ratios = {};
+                const warnings = [];
+
+                const currentAssets = getVal(parsed, ['currentassets', 'ca']);
+                const currentLiabilities = getVal(parsed, ['currentliabilities', 'cl']);
+                const totalLiabilities = getVal(parsed, ['totalliabilities', 'tl', 'liabilities']);
+                const totalEquity = getVal(parsed, ['totalequity', 'equity', 'shareholdersequity']);
+                const inventory = getVal(parsed, ['inventory', 'inventories']);
+                const netProfit = getVal(parsed, ['netprofit', 'netincome']);
+                const revenue = getVal(parsed, ['revenue', 'sales', 'totalsales']);
+
+                if (currentAssets !== null && currentLiabilities !== null && currentLiabilities !== 0) {
+                    const val = currentAssets / currentLiabilities;
+                    let status = 'warning', interpretation = 'Needs attention';
+                    if (val >= 1.5 && val <= 2.5) { status = 'good'; interpretation = 'Healthy liquidity. Can comfortably cover short-term debts.'; }
+                    else if (val < 1.0) { status = 'danger'; interpretation = 'High risk. Cannot cover short-term obligations.'; }
+                    else if (val > 2.5) { status = 'warning'; interpretation = 'Inefficient use of capital. Holding too much idle assets.'; }
+                    else if (val >= 1.0 && val < 1.5) { status = 'warning'; interpretation = 'Adequate but tight liquidity.'; }
+                    
+                    ratios['currentRatio'] = { name: 'Current Ratio', value: val.toFixed(2), formula: 'Current Assets / Current Liabilities', status, interpretation, category: 'Liquidity' };
+                }
+
+                if (totalLiabilities !== null && totalEquity !== null && totalEquity !== 0) {
+                    const val = totalLiabilities / totalEquity;
+                    let status = 'warning', interpretation = 'Moderate leverage.';
+                    if (val <= 1.0) { status = 'good'; interpretation = 'Low risk. Primarily financed through equity.'; }
+                    else if (val > 2.0) { status = 'danger'; interpretation = 'High risk. Overleveraged, heavily dependent on debt.'; }
+                    else { status = 'warning'; interpretation = 'Moderate reliance on debt financing.'; }
+
+                    ratios['debtToEquity'] = { name: 'Debt to Equity', value: val.toFixed(2), formula: 'Total Liabilities / Total Equity', status, interpretation, category: 'Solvency' };
+                }
+
+                if (currentAssets !== null && inventory !== null && currentLiabilities !== null && currentLiabilities !== 0) {
+                    const val = (currentAssets - inventory) / currentLiabilities;
+                    let status = 'warning', interpretation = 'Adequate.';
+                    if (val >= 1.0) { status = 'good'; interpretation = 'Strong liquid position. Can pay immediate debts without selling inventory.'; }
+                    else if (val < 0.5) { status = 'danger'; interpretation = 'Weak liquid position. Highly dependent on inventory sales to meet obligations.'; }
+                    
+                    ratios['quickRatio'] = { name: 'Quick Ratio', value: val.toFixed(2), formula: '(Current Assets - Inventory) / Current Liabilities', status, interpretation, category: 'Liquidity' };
+                }
+
+                if (netProfit !== null && revenue !== null && revenue !== 0) {
+                    const val = (netProfit / revenue) * 100;
+                    let status = 'warning', interpretation = 'Average profitability.';
+                    if (val >= 10) { status = 'good'; interpretation = 'Strong profitability. Retaining a good portion of revenue.'; }
+                    else if (val < 5) { status = 'danger'; interpretation = 'Low profitability margin. Vulnerable to cost increases.'; }
+                    
+                    ratios['netProfitMargin'] = { name: 'Net Profit Margin', value: val.toFixed(2) + '%', formula: '(Net Profit / Revenue) * 100', status, interpretation, category: 'Profitability' };
+                }
+
+                return { ratios, warnings };
+            }
+
+            function buildHierarchyData(ratios, parsedInput) {
+                const root = { name: "Sales Performance Analysis", type: "root", children: [] };
+                const categories = {};
+                
+                for (const key in ratios) {
+                    const ratio = ratios[key];
+                    if (!categories[ratio.category]) categories[ratio.category] = [];
+                    categories[ratio.category].push({ name: ratio.name, value: ratio.value, type: "ratio", status: ratio.status, details: ratio });
+                }
+
+                for (const catName in categories) {
+                    root.children.push({ name: catName, type: "category", children: categories[catName] });
+                }
+
+                const rawDataChildren = [];
+                for (const key in parsedInput) {
+                     rawDataChildren.push({ name: parsedInput[key].originalKey, value: parsedInput[key].value.toLocaleString(), type: "raw" });
+                }
+                
+                if(rawDataChildren.length > 0) root.children.push({ name: "Input Data", type: "input-group", children: rawDataChildren });
+
+                // Add empty state handling if nothing extracted
+                if(root.children.length === 0) {
+                    root.children.push({ name: "No standard data found", type: "category", children: [] });
+                }
+
+                return root;
+            }
+
+            // --- Visualization (Mind Map) ---
+
+            function renderMindmap(data) {
+                const width = elements.views['mindmap-view'].clientWidth || 800;
+                const height = elements.views['mindmap-view'].clientHeight || 600;
+                
+                elements.svg.selectAll("*").remove();
+
+                zoom = d3.zoom().scaleExtent([0.3, 3]).on("zoom", (event) => g.attr("transform", event.transform));
+                elements.svg.call(zoom);
+
+                g = elements.svg.append("g");
+                elements.svg.call(zoom.transform, d3.zoomIdentity.translate(width / 2, height / 4).scale(1));
+
+                const treeMap = d3.tree().nodeSize([180, 100]); 
+                const root = d3.hierarchy(data, d => d.children);
+                
+                const treeData = treeMap(root);
+                const nodes = treeData.descendants();
+                const links = treeData.links();
+
+                const linkPathGenerator = d3.linkVertical().x(d => d.x).y(d => d.y);
+
+                g.selectAll(".link").data(links).enter().append("path").attr("class", "link").attr("d", linkPathGenerator);
+
+                const node = g.selectAll(".node").data(nodes).enter().append("g").attr("class", "node").attr("transform", d => `translate(${d.x},${d.y})`);
+
+                node.each(function(d) {
+                    const el = d3.select(this);
+                    if (d.data.type === 'root') {
+                        el.append("rect").attr("width", 200).attr("height", 40).attr("x", -100).attr("y", -20).attr("rx", 8).style("fill", "#1a73e8").style("stroke", "none");
+                        el.append("text").attr("dy", 5).attr("text-anchor", "middle").style("fill", "white").style("font-weight", "bold").text(d.data.name);
+                    } else if (d.data.type === 'category' || d.data.type === 'input-group') {
+                        el.append("rect").attr("width", 140).attr("height", 30).attr("x", -70).attr("y", -15).style("fill", "#e8f0fe").style("stroke", "#1a73e8");
+                        el.append("text").attr("dy", 4).attr("text-anchor", "middle").style("font-weight", "600").text(d.data.name);
+                    } else if (d.data.type === 'ratio') {
+                        let statusColor = "#f3f4f6", strokeColor = "#d1d5db";
+                        if(d.data.status === 'good') { statusColor = "#def7ec"; strokeColor = "#31c48d"; }
+                        else if(d.data.status === 'warning') { statusColor = "#fdf6b2"; strokeColor = "#faca15"; }
+                        else if(d.data.status === 'danger') { statusColor = "#fde8e8"; strokeColor = "#f98080"; }
+
+                        el.append("rect").attr("width", 160).attr("height", 50).attr("x", -80).attr("y", -25).style("fill", statusColor).style("stroke", strokeColor);
+                        el.append("text").attr("dy", -5).attr("text-anchor", "middle").style("font-weight", "bold").text(d.data.name);
+                        el.append("text").attr("dy", 12).attr("text-anchor", "middle").style("font-size", "14px").text(d.data.value);
+
+                        el.on("mouseover", function(event, d) {
+                            const details = d.data.details;
+                            elements.tooltip.transition().duration(200).style("opacity", .95);
+                            let statusBadge = '';
+                            if(details.status === 'good') statusBadge = '<span class="inline-block px-2 py-1 bg-green-100 text-green-800 rounded text-xs mt-1">Healthy</span>';
+                            if(details.status === 'warning') statusBadge = '<span class="inline-block px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs mt-1">Monitor</span>';
+                            if(details.status === 'danger') statusBadge = '<span class="inline-block px-2 py-1 bg-red-100 text-red-800 rounded text-xs mt-1">High Risk</span>';
+
+                            elements.tooltip.html(`
+                                <div class="font-bold border-b pb-1 mb-1 border-gray-200">${details.name}</div>
+                                <div class="text-xs text-gray-500 font-mono mb-2">${details.formula}</div>
+                                <div class="mb-1"><strong>Value:</strong> ${details.value}</div>
+                                <div class="text-xs italic">${details.interpretation}</div>
+                                ${statusBadge}
+                            `).style("left", (event.pageX + 10) + "px").style("top", (event.pageY - 28) + "px");
+                        }).on("mouseout", () => elements.tooltip.transition().duration(500).style("opacity", 0));
+                    } else if (d.data.type === 'raw') {
+                        el.append("rect").attr("width", 140).attr("height", 24).attr("x", -70).attr("y", -12).attr("rx", 12).style("fill", "#ffffff").style("stroke", "#e5e7eb").style("stroke-dasharray", "2,2");
+                        el.append("text").attr("dy", 4).attr("text-anchor", "middle").style("font-size", "10px").style("fill", "#6b7280").text(`${d.data.name}: ${d.data.value}`);
+                    }
+                });
+
+                const totalLength = elements.svg.selectAll("path.link").node() ? elements.svg.selectAll("path.link").node().getTotalLength() : 0;
+                elements.svg.selectAll("path.link").attr("stroke-dasharray", totalLength + " " + totalLength).attr("stroke-dashoffset", totalLength)
+                    .transition().duration(1000).attr("stroke-dashoffset", 0);
+            }
+
+            // --- Report Generation ---
+            function generateReport(ratios, parsedInput) {
+                let html = `<div class="border-b pb-8 mb-8"><h2 class="text-3xl font-bold text-gray-900 mb-2">Sales Performance Report</h2><p class="text-gray-500 sans-serif text-sm">Generated on ${new Date().toLocaleDateString()}</p></div>`;
+
+                if (Object.keys(ratios).length === 0) {
+                    html += `<div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6"><p class="text-sm text-yellow-700">Not enough standardized data found to calculate key ratios. Ensure your document contains clear figures for Assets, Liabilities, and Equity.</p></div>`;
+                }
+
+                const categories = {};
+                for (const key in ratios) {
+                    const r = ratios[key];
+                    if (!categories[r.category]) categories[r.category] = [];
+                    categories[r.category].push(r);
+                }
+
+                for (const cat in categories) {
+                    html += `<div class="mb-10"><h3 class="text-2xl font-semibold text-gray-800 mb-4 font-sans border-b pb-2">${cat} Analysis</h3><div class="space-y-6">`;
+                    categories[cat].forEach(ratio => {
+                        let colorClass = "text-gray-600", bgClass = "bg-gray-50", borderClass = "border-gray-200", icon = '<i class="fas fa-info-circle"></i>';
+                        if (ratio.status === 'good') { colorClass = "text-green-700"; bgClass = "bg-green-50"; borderClass = "border-green-200"; icon = '<i class="fas fa-check-circle"></i>';}
+                        if (ratio.status === 'warning') { colorClass = "text-yellow-700"; bgClass = "bg-yellow-50"; borderClass = "border-yellow-200"; icon = '<i class="fas fa-exclamation-triangle"></i>';}
+                        if (ratio.status === 'danger') { colorClass = "text-red-700"; bgClass = "bg-red-50"; borderClass = "border-red-200"; icon = '<i class="fas fa-times-circle"></i>';}
+
+                        html += `
+                            <div class="p-5 rounded-xl border ${borderClass} shadow-sm bg-white transition-all hover:shadow-md">
+                                <div class="flex justify-between items-start mb-3">
+                                    <div><h4 class="text-lg font-bold font-sans flex items-center gap-2"><span class="${colorClass}">${icon}</span> ${ratio.name}</h4>
+                                    <code class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded mt-1 inline-block">${ratio.formula}</code></div>
+                                    <div class="text-2xl font-bold font-sans ${colorClass}">${ratio.value}</div>
+                                </div>
+                                <div class="mt-4 p-4 rounded-lg ${bgClass} text-sm leading-relaxed text-gray-800"><strong>Interpretation:</strong> ${ratio.interpretation}</div>
+                            </div>
+                        `;
+                    });
+                    html += `</div></div>`;
+                }
+
+                html += `<div class="mt-12 pt-8 border-t border-gray-200"><h3 class="text-xl font-semibold text-gray-800 mb-4 font-sans">Extracted Data</h3><div class="grid grid-cols-2 md:grid-cols-3 gap-4">`;
+                for(const key in parsedInput) {
+                    html += `<div class="bg-gray-50 p-3 rounded border border-gray-100"><div class="text-xs text-gray-500 uppercase tracking-wider">${parsedInput[key].originalKey}</div><div class="font-mono font-medium">${parsedInput[key].value.toLocaleString()}</div></div>`;
+                }
+                html += `</div></div>`;
+                elements.reportContent.innerHTML = html;
+            }
+
+
+            // --- Chat Interface Logic ---
+
+            function addChatMessage(role, text) {
+                const isUser = role === 'user';
+                const icon = isUser ? '<i class="fas fa-user text-indigo-600 text-sm"></i>' : '<i class="fas fa-robot text-blue-600 text-sm"></i>';
+                const bgIcon = isUser ? 'bg-indigo-100' : 'bg-blue-100';
+                const bgBubble = isUser ? 'bg-indigo-50 border border-indigo-100' : 'bg-gray-100';
+                const borderRadius = isUser ? 'rounded-2xl rounded-tr-none' : 'rounded-2xl rounded-tl-none';
+                
+                // Formatted text (basic markdown for bold)
+                const formattedText = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+                const html = `
+                    <div class="flex gap-3 ${isUser ? 'flex-row-reverse' : ''}">
+                        <div class="w-8 h-8 rounded-full ${bgIcon} flex items-center justify-center flex-shrink-0">
+                            ${icon}
+                        </div>
+                        <div class="${bgBubble} ${borderRadius} px-4 py-3 text-sm text-gray-800 max-w-[85%] leading-relaxed">
+                            ${formattedText}
+                        </div>
+                    </div>
+                `;
+                
+                elements.chatHistoryContainer.insertAdjacentHTML('beforeend', html);
+                elements.chatHistoryContainer.scrollTop = elements.chatHistoryContainer.scrollHeight;
+            }
+
+            async function handleChat() {
+                const message = elements.chatInput.value.trim();
+                if (!message) return;
+                
+                if (!elements.apiKey.value) {
+                    showToast("Please enter your Gemini API Key first.", "error");
+                    return;
+                }
+
+                // UI update
+                addChatMessage('user', message);
+                elements.chatInput.value = '';
+                elements.chatInput.style.height = 'auto'; // reset height
+                elements.chatSendBtn.disabled = true;
+                
+                // Keep history for context
+                state.chatHistory.push(`User: ${message}`);
+                
+                // Compile chat prompt
+                const historyContext = state.chatHistory.slice(-5).join("\n"); // keep last 5 exchanges
+                const chatPrompt = `
+                    Based on the provided document context and the user's question below, provide a helpful, concise financial answer. 
+                    If the answer isn't in the document, mention that.
+                    
+                    Recent conversation:
+                    ${historyContext}
+                    
+                    Respond directly to the user's latest query.
+                `;
+
+                try {
+                    // Use a visual indicator for typing
+                    const loadingId = 'chat-loading-' + Date.now();
+                    elements.chatHistoryContainer.insertAdjacentHTML('beforeend', `
+                        <div id="${loadingId}" class="flex gap-3">
+                            <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0"><i class="fas fa-robot text-blue-600 text-sm"></i></div>
+                            <div class="bg-gray-100 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-gray-500 max-w-[85%] flex items-center gap-1">
+                                <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                                <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
+                                <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
+                            </div>
+                        </div>
+                    `);
+                    elements.chatHistoryContainer.scrollTop = elements.chatHistoryContainer.scrollHeight;
+
+                    const response = await callGemini(chatPrompt, false);
+                    
+                    document.getElementById(loadingId).remove();
+                    addChatMessage('assistant', response);
+                    state.chatHistory.push(`Assistant: ${response}`);
+
+                } catch (err) {
+                    // Remove loading indicator if exists
+                    const loaders = elements.chatHistoryContainer.querySelectorAll('[id^="chat-loading-"]');
+                    loaders.forEach(l => l.remove());
+                    
+                    addChatMessage('assistant', "Sorry, I encountered an error. Check your API key and try again.");
+                } finally {
+                    elements.chatSendBtn.disabled = false;
+                }
+            }
+
+            elements.chatSendBtn.addEventListener('click', handleChat);
+            elements.chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleChat();
+                }
+            });
+
+        });
+    </script>
+</body>
+</html>
